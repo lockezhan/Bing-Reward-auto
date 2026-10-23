@@ -1,0 +1,13 @@
+{
+  "accounts": [
+    {
+      "email": "example1@outlook.com",
+      "password": "your_password_here"
+    },
+    {
+      "email": "example2@outlook.com",
+      "password": "your_password_here"
+    }
+  ]
+}
+

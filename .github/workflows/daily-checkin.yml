@@ -1,0 +1,57 @@
+name: Bing Rewards Pro Daily Automation
+
+on:
+  schedule:
+    # 每天 UTC 01:30 (北京时间 09:30) 自动执行
+    - cron: '30 1 * * *'
+  workflow_dispatch:  # 支持在 GitHub 网页手动点击触发
+  push:
+    branches: [ main ]
+
+jobs:
+  rewards-checkin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180  # 3 小时全局超时保护
+
+    env:
+      PYTHONUNBUFFERED: "1"
+      ACCOUNTS_CONFIG: ${{ secrets.ACCOUNTS_CONFIG }}
+      PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+      SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
+      CUSTOM_WEBHOOK: ${{ secrets.CUSTOM_WEBHOOK }}
+      DASHBOARD_REPORT_URL: ${{ secrets.DASHBOARD_REPORT_URL }}
+      DASHBOARD_REPORT_TOKEN: ${{ secrets.DASHBOARD_REPORT_TOKEN }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright Chromium with OS Dependencies
+        run: |
+          playwright install --with-deps chromium
+
+      - name: Run Bing Rewards Automation
+        run: |
+          python main.py --once
+
+      - name: Upload Logs & Debug Screenshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: execution-logs-and-screenshots
+          path: |
+            logs/*.log
+            screenshots/*.png
+          retention-days: 7
+

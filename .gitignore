@@ -1,0 +1,36 @@
+# 账号与敏感配置
+accounts.json
+config/accounts.json
+.env
+
+# 浏览器会话与 Cookie 缓存
+.sessions/
+*.session
+
+# 日志与调试截图
+logs/
+*.log
+screenshots/
+*.png
+
+# 临时测试与排查脚本
+scratch/
+tmp/
+*.tmp
+*.html
+
+# IDE与编辑器缓存
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+.pytest_cache/
+
