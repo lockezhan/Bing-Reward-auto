@@ -6,6 +6,21 @@ from typing import List, Dict, Any
 # 项目根目录
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# 简易自动加载本地 .env 配置 (若存在)
+env_file = BASE_DIR / ".env"
+if env_file.exists():
+    try:
+        with open(env_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    k, v = k.strip(), v.strip().strip("'\"")
+                    if k and k not in os.environ:
+                        os.environ[k] = v
+    except Exception:
+        pass
+
 # 浏览器会话缓存目录
 SESSIONS_DIR = BASE_DIR / ".sessions"
 SESSIONS_DIR.mkdir(exist_ok=True)

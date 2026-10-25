@@ -45,33 +45,54 @@ def ensure_rewards_dashboard(page: Page) -> bool:
 def get_points_summary(page: Page, max_wait_sec: int = 15) -> Tuple[str, str]:
     """
     获取账号积分概览：(总积分, 今日已获积分)
-    采用动态等待与轮询机制，确保新版 React SPA (p.text-pageHeader) 异步渲染完全加载
+    采用多通道智能提取与兜底机制：
+    1. React 状态树与内嵌流式 JSON 数据 (balance, availablePoints)
+    2. DOM 属性 (aria-valuenow) 与页面元素
+    3. Bing 首页顶部常驻控件 (#id_rc) 兜底
     """
     total_points = "0"
     today_points = "0"
     try:
         ensure_rewards_dashboard(page)
+        # 预先按 Escape 关掉阻挡视口渲染的抽屉或提示弹窗
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
 
-        # 轮询等待，直至积分元素加载完成并包含有效正整数
         start_time = time.time()
         while time.time() - start_time < max_wait_sec:
             try:
-                # 策略 1: 新版 React 仪表盘核心可用积分元素 (p.text-pageHeader)
-                pts_loc = page.locator("p.text-pageHeader").first
-                if pts_loc.is_visible():
-                    txt = pts_loc.inner_text().strip()
-                    digits = re.sub(r"[^\d]", "", txt)
-                    if digits and int(digits) > 0:
-                        total_points = digits
-                        break
+                content = page.content() or ""
 
-                # 策略 2: 导航栏区域积分 (header 内包含数字的标签)
+                # 策略 1: React 状态树与内嵌流式 JSON (最抗遮挡、最准确，适配 Next.js RSC payload)
+                # 匹配 \"balance\":6122, "balance": 6122, \"availablePoints\":6122 等
+                balance_matches = re.findall(r'(?:balance|availablePoints)\D{1,5}(\d{2,7})', content)
+                valid_balances = [int(x) for x in balance_matches if 0 < int(x) < 2000000]
+                if valid_balances:
+                    total_points = str(valid_balances[0])
+                    break
+
+                # 策略 2: DOM 核心属性 (仪表盘进度条与圆环上的 aria-valuenow)
+                aria_elements = page.locator("[aria-valuenow]").all()
+                for el in aria_elements:
+                    try:
+                        val = el.get_attribute("aria-valuenow") or ""
+                        if val.isdigit() and int(val) > 100:
+                            total_points = val
+                            break
+                    except Exception:
+                        pass
+                if total_points != "0":
+                    break
+
+                # 策略 3: 导航栏区域与可见文本元素
                 header_elems = page.locator("header [data-bi-name='points'], header span, header p").all()
                 for elem in header_elems:
                     try:
                         if elem.is_visible():
                             txt = elem.inner_text().strip().replace(",", "")
-                            if txt.isdigit() and 0 < int(txt) < 1000000:
+                            if txt.isdigit() and 100 < int(txt) < 1000000:
                                 total_points = txt
                                 break
                     except Exception:
@@ -79,24 +100,17 @@ def get_points_summary(page: Page, max_wait_sec: int = 15) -> Tuple[str, str]:
                 if total_points != "0":
                     break
 
-                # 策略 3: DOM 解析与内嵌 JSON
-                content = page.content()
-                soup = BeautifulSoup(content, "html.parser")
-                pts_header = soup.select_one("p.text-pageHeader")
-                if pts_header:
-                    digits = re.sub(r"[^\d]", "", pts_header.get_text())
-                    if digits and int(digits) > 0:
-                        total_points = digits
+                # 策略 4: 检查 p.text-pageHeader (仅当纯数字时采纳，避开用户昵称)
+                pts_loc = page.locator("p.text-pageHeader").first
+                if pts_loc.is_visible():
+                    txt = pts_loc.inner_text().strip().replace(",", "")
+                    if txt.isdigit() and int(txt) > 0:
+                        total_points = txt
                         break
 
-                match_total = re.search(r'"availablePoints"\s*:\s*(\d+)', content)
-                if match_total and int(match_total.group(1)) > 0:
-                    total_points = match_total.group(1)
-                    break
             except Exception as loop_e:
                 logger.debug(f"轮询积分数据暂未就绪: {loop_e}")
 
-            # 轮询等待过程中，若超时一半，尝试按一次 Escape 关掉阻挡渲染的弹窗
             if time.time() - start_time > max_wait_sec / 2:
                 try:
                     page.keyboard.press("Escape")
@@ -105,26 +119,45 @@ def get_points_summary(page: Page, max_wait_sec: int = 15) -> Tuple[str, str]:
 
             page.wait_for_timeout(1000)
 
-        # 若超时后依然为 0，尝试刷新页面单次重试
+        # 若首轮轮询依然为 0，尝试轻量刷新重试
         if total_points == "0":
-            logger.warning("⚠️ 页面首次轮询未获取到积分，尝试刷新 Rewards 页面重试...")
+            logger.warning("⚠️ 页面首次轮询未获取到积分，尝试轻量刷新 Rewards 页面重试...")
             try:
-                page.reload(wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT)
-                page.wait_for_timeout(3000)
-                page.keyboard.press("Escape")
-                pts_loc = page.locator("p.text-pageHeader").first
-                if pts_loc.is_visible():
-                    txt = pts_loc.inner_text().strip()
-                    digits = re.sub(r"[^\d]", "", txt)
+                page.reload(wait_until="commit", timeout=10000)
+                page.wait_for_timeout(2500)
+                try:
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
+
+                content = page.content() or ""
+                balance_matches = re.findall(r'(?:balance|availablePoints)\D{1,5}(\d{2,7})', content)
+                valid_balances = [int(x) for x in balance_matches if 0 < int(x) < 2000000]
+                if valid_balances:
+                    total_points = str(valid_balances[0])
+            except Exception as re_err:
+                logger.warning(f"轻量刷新读取积分提示: {re_err}")
+
+        # 若依然为 0，启用通道 C：Bing 首页常驻控件兜底提取
+        if total_points == "0":
+            try:
+                logger.info("ℹ️ 尝试从 Bing 首页常驻账户控件兜底读取总积分...")
+                page.goto("https://www.bing.com", wait_until="commit", timeout=10000)
+                page.wait_for_timeout(2000)
+                bing_rc = page.locator("#id_rc").first
+                if bing_rc.is_visible():
+                    rc_txt = bing_rc.inner_text().strip().replace(",", "")
+                    digits = re.sub(r"[^\d]", "", rc_txt)
                     if digits and int(digits) > 0:
                         total_points = digits
-            except Exception as re_err:
-                logger.warning(f"刷新后重试读取积分异常: {re_err}")
+                        logger.info(f"🎯 成功从 Bing 首页控件提取到总积分: {total_points}")
+            except Exception as bing_e:
+                logger.debug(f"Bing 首页兜底读取积分提示: {bing_e}")
 
         # 尝试提取今日已获积分
         try:
-            content = page.content()
-            match_today = re.search(r'"dailyPoints"\s*:\s*(\d+)', content)
+            content = page.content() or ""
+            match_today = re.search(r'(?:dailyPoints|todayPoints)\D{1,5}(\d+)', content)
             if match_today:
                 today_points = match_today.group(1)
         except Exception:
@@ -210,7 +243,9 @@ def claim_pending_points(page: Page) -> bool:
             for i in range(fallback.count()):
                 fb = fallback.nth(i)
                 if fb.is_visible():
-                    claim_targets.append(fb)
+                    txt = fb.inner_text().strip()
+                    if not (txt.startswith("0") or "0\n" in txt):
+                        claim_targets.append(fb)
 
         if not claim_targets:
             logger.debug("未发现待领取的 Rewards 暂存箱或当前无可领积分")
@@ -218,8 +253,8 @@ def claim_pending_points(page: Page) -> bool:
 
         target = claim_targets[0]
         logger.info("🎯 检测到待领取暂存积分，正在点击打开认领面板...")
-        target.click()
-        page.wait_for_timeout(2500)
+        target.click(timeout=3000)
+        page.wait_for_timeout(2000)
 
         # 2. 检查是否有弹出的确认抽屉/弹窗并点击确认按钮
         confirmed = False
@@ -233,10 +268,14 @@ def claim_pending_points(page: Page) -> bool:
         ]
         for cl in confirm_locators:
             try:
-                if cl.first.is_visible():
-                    logger.info(f"🎯 成功定位到抽屉/弹窗内确认按钮: '{cl.first.inner_text().strip()}'，执行确认认领...")
-                    cl.first.click()
-                    page.wait_for_timeout(3500)
+                if cl.first.is_visible() and cl.first.is_enabled():
+                    btn_txt = cl.first.inner_text().strip()
+                    if btn_txt.startswith("0") or "0\n" in btn_txt:
+                        logger.info("ℹ️ 暂存箱当前可领积分为 0，无需认领")
+                        continue
+                    logger.info(f"🎯 成功定位到抽屉/弹窗内确认按钮: '{btn_txt}'，执行确认认领...")
+                    cl.first.click(timeout=3000)
+                    page.wait_for_timeout(2500)
                     confirmed = True
                     break
             except Exception:
@@ -250,13 +289,16 @@ def claim_pending_points(page: Page) -> bool:
                 d_btns = d.locator("button, [role='button']").all()
                 for btn in d_btns:
                     try:
-                        txt = btn.inner_text().strip()
-                        if any(w in txt for w in ["领取积分", "領取積分", "领取点数", "領取點數", "Claim"]):
-                            logger.info(f"🎯 在弹窗抽屉容器内定位到确认按钮: '{txt}'，执行点击...")
-                            btn.click()
-                            page.wait_for_timeout(3500)
-                            confirmed = True
-                            break
+                        if btn.is_enabled():
+                            txt = btn.inner_text().strip()
+                            if txt.startswith("0") or "0\n" in txt:
+                                continue
+                            if any(w in txt for w in ["领取积分", "領取積分", "领取点数", "領取點數", "Claim"]):
+                                logger.info(f"🎯 在弹窗抽屉容器内定位到确认按钮: '{txt}'，执行点击...")
+                                btn.click(timeout=3000)
+                                page.wait_for_timeout(2500)
+                                confirmed = True
+                                break
                     except Exception:
                         pass
                 if confirmed:
